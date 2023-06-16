@@ -1,5 +1,5 @@
 // import { JsonRpcProvider, Wallet, getBytes, concat, AbiCoder } from "ethers"; // v6
-import { BigNumber, Contract, Wallet, ethers } from "ethers";
+import { BigNumber, Wallet } from "ethers";
 import { defaultAbiCoder, hexConcat, arrayify } from "ethers/lib/utils";
 import { JSONRPC, JSONRPCRequest } from "json-rpc-2.0";
 import {
@@ -40,30 +40,21 @@ export async function handlePaymasterAndData(
       BUNDLER_URL
     );
     const signer = new Wallet(PRIVATE_KEY, provider);
-    // const paymaster: VerifyingPaymaster =
-    //   new VerifyingPaymaster__factory().attach(PAYMASTER_ADDRESS);
-    // const entryPoint: EntryPoint = new EntryPoint__factory().attach(
-    //   ENTRYPOINT_ADDRESS
-    // );
 
+    // get `entryPoint` and `paymaster` contract
     const entryPointAddress =
       ENTRYPOINT_ADDRESS ?? Constants.ERC4337.EntryPoint;
-    const paymaster = new Contract(
-      PAYMASTER_ADDRESS,
-      VerifyingPaymaster__factory.abi,
-      provider
-    );
-    const entryPoint = new Contract(
-      entryPointAddress,
-      EntryPoint__factory.abi,
-      provider
+    const paymaster: VerifyingPaymaster = new VerifyingPaymaster__factory(
+      signer
+    ).attach(PAYMASTER_ADDRESS);
+    const entryPoint: EntryPoint = new EntryPoint__factory(signer).attach(
+      entryPointAddress
     );
 
     // get signature validation params
     const sigExpiration = SIGNATURE_EXPIRATION ?? DEFAULT_SIGNATURE_EXPIRATION;
-    const currentBlockTimestamp = (await provider.getBlock("latest"))!
-      .timestamp;
-    const sigExpiredAt = currentBlockTimestamp + sigExpiration;
+    const currentTimestamp = BigNumber.from(Math.floor(Date.now() / 1000));
+    const sigExpiredAt = currentTimestamp.add(sigExpiration);
 
     // const defaultAbiCoder = AbiCoder.defaultAbiCoder();
     let userOpWithPaymaster: UserOperationStruct = {
@@ -76,11 +67,13 @@ export async function handlePaymasterAndData(
         paymaster.address,
         defaultAbiCoder.encode(
           ["uint48", "uint48"],
-          [sigExpiredAt, currentBlockTimestamp]
+          [sigExpiredAt, currentTimestamp]
         ),
         DUMP_SIGNATURE,
       ]),
     };
+
+    // TODO: call estimateUserOperationGas after append `paymasterAndData`, then append updated gas on the `userOp`
     // const estimateOpGas = await provider.send("eth_estimateUserOperationGas", [
     //   userOpWithPaymaster,
     //   entryPointAddress,
@@ -91,7 +84,7 @@ export async function handlePaymasterAndData(
     const hash = await paymaster.getHash(
       userOpWithPaymaster,
       sigExpiredAt,
-      currentBlockTimestamp
+      currentTimestamp
     );
 
     // sign with `verifyingSigner`, then append sig on `paymasterAndData` for validate on-chain
@@ -100,15 +93,16 @@ export async function handlePaymasterAndData(
       paymaster.address,
       defaultAbiCoder.encode(
         ["uint48", "uint48"],
-        [sigExpiredAt, currentBlockTimestamp]
+        [sigExpiredAt, currentTimestamp]
       ),
       sig,
     ]);
     console.log("userOpWithPaymaster:", userOpWithPaymaster);
 
+    // TODO: run `simulateValidation` on entryPoint to verify the `userOp` will be valid on-chain
     // simulate validation on `entryPoint` contract
     // const res = await entryPoint.callStatic
-    //   .simulateHandleOp(userOpWithPaymaster, ethers.constants.AddressZero, "0x")
+    //   .simulateValidation(userOpWithPaymaster)
     //   .catch((e) => {
     //     if (e.errorName !== "ValidationResult") {
     //       throw e;
